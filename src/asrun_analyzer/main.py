@@ -9,6 +9,8 @@ from .models import AsRunFile, Event
 from .parser import parse_xml_file
 from .config import Config
 from .scheduler import AsRunScheduler
+from .transfer import AsRunTransfer  
+
 
 # Set up logging
 logging.basicConfig(
@@ -225,42 +227,66 @@ async def test_configuration():
             detail=f"Configuration test failed: {str(e)}"
         )
         
-@app.get("/sftp/test")
-async def test_sftp():
-    """Test SFTP connection without transferring files"""
+@app.get("/ftp/list")
+async def list_ftp_files():
+    """List available BXF files without downloading, sorted by newest first"""
     try:
         config = Config()
+        transfer = AsRunTransfer(config)
+        
         try:
-            # Initialize transfer
-            transfer = AsRunTransfer(config)
-            
-            # Test connection
             transfer.connect()
             
-            # List directory contents (just count them, don't expose names)
-            try:
-                files = transfer.list_files(hours_ago=24)
-                file_count = len(files)
+            # Get raw directory listing
+            raw_files = []
+            transfer.ftp.cwd(config.remote_path)
+            transfer.ftp.retrlines('LIST', lambda x: raw_files.append(x))
+            
+            # Parse and filter BXF files with timestamps
+            parsed_files = []
+            for file_info in raw_files:
+                if 'BXF' not in file_info:
+                    continue
+                    
+                parts = file_info.split()
+                if len(parts) < 9:
+                    continue
                 
-                return {
-                    "status": "success",
-                    "connection": "successful",
-                    "remote_path_exists": True,
-                    "files_found": file_count,
-                    "files_from_hours": 24
-                }
-            except Exception as e:
-                return {
-                    "status": "partial_success",
-                    "connection": "successful",
-                    "error": f"Connected but couldn't list files: {str(e)}",
-                    "remote_path_exists": False
-                }
+                # Parse timestamp
+                try:
+                    time_str = ' '.join(parts[-4:-1])
+                    file_time = datetime.strptime(time_str, '%b %d %H:%M')
+                    # Add year (assume current year, adjust if month is ahead of current month)
+                    current_time = datetime.now()
+                    file_time = file_time.replace(year=current_time.year)
+                    if file_time.month > current_time.month:
+                        file_time = file_time.replace(year=current_time.year - 1)
+                    
+                    parsed_files.append({
+                        'timestamp': file_time,
+                        'info': file_info
+                    })
+                except Exception as e:
+                    logger.warning(f"Could not parse time for file info {file_info}: {str(e)}")
+                    continue
+            
+            # Sort by timestamp, newest first
+            parsed_files.sort(key=lambda x: x['timestamp'], reverse=True)
+            
+            return {
+                "status": "success",
+                "connection": "successful",
+                "total_files": len(raw_files),
+                "bxf_files": len(parsed_files),
+                "file_list": [f['info'] for f in parsed_files[:10]],  # Show newest 10 BXF files
+                "newest_file_time": parsed_files[0]['timestamp'].isoformat() if parsed_files else None,
+                "oldest_file_time": parsed_files[-1]['timestamp'].isoformat() if parsed_files else None
+            }
             
         except Exception as e:
             return {
                 "status": "error",
-                "error": f"Connection failed: {str(e)}",
+                "error": f"Error listing files: {str(e)}",
                 "connection": "failed"
             }
             
@@ -268,8 +294,8 @@ async def test_sftp():
             transfer.disconnect()
             
     except Exception as e:
-        logger.error(f"SFTP test failed: {str(e)}")
+        logger.error(f"FTP list failed: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"SFTP test failed: {str(e)}"
+            detail=f"FTP list failed: {str(e)}"
         )
