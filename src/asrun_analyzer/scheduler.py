@@ -1,11 +1,11 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from typing import Optional
-from .transfer import AsRunTransfer
-from .config import Config
-import asyncio
+import pytz
+import paramiko
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -13,42 +13,67 @@ class AsRunScheduler:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
         self._is_running = False
-        self.config = Config()
-        self.transfer = AsRunTransfer(self.config)
+        self.alaska_tz = pytz.timezone('America/Anchorage')
 
-    async def process_asrun_files(self):
-        """Process AsRun files from configured source"""
+    async def check_asrun_files(self):
+        """Check for missing AsRun files and handle alerts/restarts"""
         try:
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            logger.info(f"Starting scheduled AsRun processing at {current_time}")
+            current_time = datetime.now(self.alaska_tz)
+            logger.info(f"Running scheduled AsRun file check at {current_time}")
             
-            # Download new files
-            downloaded_files = await asyncio.to_thread(
-                self.transfer.process_new_files,
-                hours_ago=1
-            )
+            # Import here to avoid circular imports
+            from .main import check_latest_file
             
-            logger.info(f"Downloaded {len(downloaded_files)} new files")
+            # Run the check
+            result = await check_latest_file()
             
-            # TODO: Process the downloaded files
-            # This is where we'll add the file processing code
-            
-            logger.info(f"Completed scheduled processing at {current_time}")
+            if result["status"] == "success" and result.get("days_behind", 0) > 0:
+                logger.warning(f"Missing AsRun files detected: {result['warning']}")
+                await self.handle_missing_files(result)
             
         except Exception as e:
-            logger.error(f"Error in scheduled processing: {str(e)}")
+            logger.error(f"Error in scheduled file check: {str(e)}")
             logger.exception("Full traceback:")
+
+    async def handle_missing_files(self, check_result):
+        """Handle missing files by sending alerts and optionally restarting traffic module"""
+        try:
+            # Prepare alert message
+            message = (
+                f"AsRun File Alert\n"
+                f"Missing files detected at {check_result['current_time_alaska']}\n"
+                f"Last successful file: {check_result['latest_file']['date']}\n"
+                f"Missing dates: {', '.join(check_result['missing_dates'])}\n"
+                f"Days behind: {check_result['days_behind']}"
+            )
+            
+            # Log the alert
+            logger.warning(message)
+            
+            # TODO: Add email notification here
+            # await self.send_email_alert(message)
+            
+            # TODO: Add traffic module restart logic here
+            # if check_result['days_behind'] >= 1:
+            #     await self.restart_traffic_module()
+            
+        except Exception as e:
+            logger.error(f"Error handling missing files: {str(e)}")
 
     def start(self):
         """Start the scheduler"""
         if not self._is_running:
             try:
-                # Schedule the job to run at the start of every hour
+                # Schedule the file check for 6:05 AM Alaska time
                 self.scheduler.add_job(
-                    self.process_asrun_files,
-                    CronTrigger(minute=0),  # Run at the start of every hour
-                    id='process_asrun_files',
-                    name='Process AsRun Files',
+                    self.check_asrun_files,
+                    CronTrigger(
+                        hour=6,
+                        minute=5,
+                        timezone=self.alaska_tz
+                    ),
+                    id='check_asrun_files',
+                    name='Check AsRun Files',
                     replace_existing=True
                 )
                 
@@ -77,6 +102,6 @@ class AsRunScheduler:
     def get_next_run_time(self) -> Optional[datetime]:
         """Get the next scheduled run time"""
         if self._is_running:
-            job = self.scheduler.get_job('process_asrun_files')
+            job = self.scheduler.get_job('check_asrun_files')
             return job.next_run_time if job else None
         return None

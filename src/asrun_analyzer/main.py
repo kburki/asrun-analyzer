@@ -229,7 +229,7 @@ async def test_configuration():
         
 @app.get("/ftp/list")
 async def list_ftp_files():
-    """List available BXF files without downloading, sorted by newest first"""
+    """List BXF PolarisPlayMyers ProTrack files"""
     try:
         config = Config()
         transfer = AsRunTransfer(config)
@@ -242,52 +242,62 @@ async def list_ftp_files():
             transfer.ftp.cwd(config.remote_path)
             transfer.ftp.retrlines('LIST', lambda x: raw_files.append(x))
             
-            # Parse and filter BXF files with timestamps
-            parsed_files = []
+            myers_files = []
+            
             for file_info in raw_files:
-                if 'BXF' not in file_info:
-                    continue
-                    
                 parts = file_info.split()
                 if len(parts) < 9:
                     continue
                 
-                # Parse timestamp
-                try:
-                    time_str = ' '.join(parts[-4:-1])
-                    file_time = datetime.strptime(time_str, '%b %d %H:%M')
-                    # Add year (assume current year, adjust if month is ahead of current month)
-                    current_time = datetime.now()
-                    file_time = file_time.replace(year=current_time.year)
-                    if file_time.month > current_time.month:
-                        file_time = file_time.replace(year=current_time.year - 1)
-                    
-                    parsed_files.append({
-                        'timestamp': file_time,
-                        'info': file_info
-                    })
-                except Exception as e:
-                    logger.warning(f"Could not parse time for file info {file_info}: {str(e)}")
-                    continue
+                filename = ' '.join(parts[8:])
+                
+                if (filename.startswith('BXF') and 
+                    'PolarisPlayMyers' in filename and 
+                    'ProTrack' in filename and 
+                    filename.endswith('.xml')):
+                    try:
+                        # Parse the datetime from the filename (BXF20241109T055959...)
+                        file_datetime_str = filename[3:18]  # Gets YYYYMMDDTHHMMSS
+                        file_datetime = datetime.strptime(file_datetime_str, '%Y%m%dT%H%M%S')
+                        
+                        myers_files.append({
+                            'timestamp': file_datetime,  # Using filename datetime instead of FTP timestamp
+                            'filename': filename,
+                            'ftp_info': file_info,
+                            'size': parts[4]
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not parse datetime from filename: {filename}, error: {str(e)}")
             
-            # Sort by timestamp, newest first
-            parsed_files.sort(key=lambda x: x['timestamp'], reverse=True)
+            # Sort by timestamp from filename, newest first
+            myers_files.sort(key=lambda x: x['timestamp'], reverse=True)
             
             return {
                 "status": "success",
-                "connection": "successful",
-                "total_files": len(raw_files),
-                "bxf_files": len(parsed_files),
-                "file_list": [f['info'] for f in parsed_files[:10]],  # Show newest 10 BXF files
-                "newest_file_time": parsed_files[0]['timestamp'].isoformat() if parsed_files else None,
-                "oldest_file_time": parsed_files[-1]['timestamp'].isoformat() if parsed_files else None
+                "total_files": len(myers_files),
+                "latest_files": [
+                    {
+                        "filename": f['filename'],
+                        "datetime": f['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                        "size": f['size']
+                    } for f in myers_files[:3]  # Show latest 3 files
+                ],
+                "debug": {
+                    "datetime_details": [
+                        {
+                            "filename": f['filename'],
+                            "parsed_datetime": f['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+                        } for f in myers_files[:5]
+                    ]
+                }
             }
             
         except Exception as e:
             return {
                 "status": "error",
                 "error": f"Error listing files: {str(e)}",
-                "connection": "failed"
+                "connection": "failed",
+                "exception_details": str(e)
             }
             
         finally:
@@ -298,4 +308,123 @@ async def list_ftp_files():
         raise HTTPException(
             status_code=500,
             detail=f"FTP list failed: {str(e)}"
+        )
+        
+@app.get("/ftp/check")
+async def check_latest_file():
+    """Check if expected BXF files exist"""
+    from datetime import datetime, timezone, timedelta
+    import pytz
+    
+    try:
+        config = Config()
+        transfer = AsRunTransfer(config)
+        
+        try:
+            transfer.connect()
+            
+            # Get raw directory listing
+            raw_files = []
+            transfer.ftp.cwd(config.remote_path)
+            transfer.ftp.retrlines('LIST', lambda x: raw_files.append(x))
+            
+            # Process files and their dates
+            processed_files = []
+            for file_info in raw_files:
+                parts = file_info.split()
+                if len(parts) < 9:
+                    continue
+                
+                filename = ' '.join(parts[8:])
+                
+                # Look for main daily BXF files (usually generated at 6 AM)
+                if (filename.startswith('BXF') and 
+                    'PolarisPlayMyers' in filename and 
+                    'ProTrack' in filename and 
+                    'T0559' in filename and  # Looking for the 5:59 AM files
+                    filename.endswith('.xml')):
+                    try:
+                        # Parse the datetime from the filename
+                        file_datetime_str = filename[3:18]  # Gets YYYYMMDDTHHMMSS
+                        file_datetime = datetime.strptime(file_datetime_str, '%Y%m%dT%H%M%S')
+                        
+                        processed_files.append({
+                            'datetime': file_datetime,
+                            'filename': filename,
+                            'size': parts[4]
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not parse datetime from filename: {filename}, error: {str(e)}")
+                        continue
+            
+            if not processed_files:
+                return {
+                    "status": "error",
+                    "message": "No valid BXF files found",
+                    "details": {
+                        "total_files_checked": len(raw_files),
+                        "sample_files": [' '.join(f.split()[8:]) for f in raw_files[:5]]  # Show sample filenames
+                    }
+                }
+            
+            # Sort by datetime, newest first
+            processed_files.sort(key=lambda x: x['datetime'], reverse=True)
+            
+            # Get current time in Alaska timezone
+            alaska_tz = pytz.timezone('America/Anchorage')
+            current_time = datetime.now(timezone.utc).astimezone(alaska_tz)
+            
+            # Get the latest file info
+            latest_file = processed_files[0]
+            latest_date = latest_file['datetime']
+            
+            # Calculate expected dates up to today
+            expected_dates = []
+            current_date = latest_date + timedelta(days=1)
+            while current_date.date() <= current_time.date():
+                expected_dates.append(current_date.date())
+                current_date += timedelta(days=1)
+            
+            # Format response based on findings
+            response = {
+                "status": "success",
+                "latest_file": {
+                    "date": latest_date.strftime('%Y-%m-%d'),
+                    "time": latest_date.strftime('%H:%M:%S'),
+                    "filename": latest_file['filename'],
+                    "size": latest_file['size']
+                },
+                "current_time_alaska": current_time.strftime('%Y-%m-%d %H:%M:%S %Z'),
+                "missing_dates": [d.strftime('%Y-%m-%d') for d in expected_dates] if expected_dates else [],
+                "is_current": len(expected_dates) == 0,
+                "days_behind": len(expected_dates)
+            }
+            
+            # Add warning message if we're behind
+            if expected_dates:
+                response["warning"] = (
+                    f"Missing {len(expected_dates)} day(s) of files. "
+                    f"Last successful file was from {latest_date.strftime('%Y-%m-%d')}"
+                )
+            else:
+                response["message"] = "All expected files are present"
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error checking files: {str(e)}")
+            return {
+                "status": "error",
+                "error": f"Error checking files: {str(e)}",
+                "connection": "failed"
+            }
+        
+        finally:
+            transfer.disconnect()
+            
+    except Exception as e:
+        logger.error(f"FTP check failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"FTP check failed: {str(e)}"
         )
