@@ -1,0 +1,78 @@
+# Environment variables
+.env
+.env.*
+*.env
+*.token
+*.key
+
+# Configuration files
+# Config files
+src/asrun_analyzer/config.py
+config/*.yml
+config/*.yaml
+config/*.json
+config/*.local.yml
+config/*.development.yml
+config/*.production.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings
+
+# BBEdit
+*.bbprojectd/
+*.bbprojectsettings
+*.bbprojectdata
+*.worksheet
+*.bbaiworksheet
+
+# Logs
+logs/
+*.log
+
+# Local development
+.DS_Store
+.coverage
+htmlcov/
+
+# Local storage
+asrun_files/
+downloads/
+
+# Credentials
+*.key
+*.pem
+*.password

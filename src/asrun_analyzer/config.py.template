@@ -1,0 +1,14 @@
+from pydantic import BaseModel
+from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+class Config(BaseModel):
+    ssh_host: str = os.getenv('ASRUN_SSH_HOST', '')
+    ssh_username: str = os.getenv('ASRUN_SSH_USER', '')
+    ssh_password: str = os.getenv('ASRUN_SSH_PASSWORD', '')
+    remote_path: str = os.getenv('ASRUN_REMOTE_PATH', '')
+    local_storage: Path = Path(os.getenv('ASRUN_LOCAL_STORAGE', './asrun_files'))
