@@ -224,3 +224,52 @@ async def test_configuration():
             status_code=500,
             detail=f"Configuration test failed: {str(e)}"
         )
+        
+@app.get("/sftp/test")
+async def test_sftp():
+    """Test SFTP connection without transferring files"""
+    try:
+        config = Config()
+        try:
+            # Initialize transfer
+            transfer = AsRunTransfer(config)
+            
+            # Test connection
+            transfer.connect()
+            
+            # List directory contents (just count them, don't expose names)
+            try:
+                files = transfer.list_files(hours_ago=24)
+                file_count = len(files)
+                
+                return {
+                    "status": "success",
+                    "connection": "successful",
+                    "remote_path_exists": True,
+                    "files_found": file_count,
+                    "files_from_hours": 24
+                }
+            except Exception as e:
+                return {
+                    "status": "partial_success",
+                    "connection": "successful",
+                    "error": f"Connected but couldn't list files: {str(e)}",
+                    "remote_path_exists": False
+                }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Connection failed: {str(e)}",
+                "connection": "failed"
+            }
+            
+        finally:
+            transfer.disconnect()
+            
+    except Exception as e:
+        logger.error(f"SFTP test failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"SFTP test failed: {str(e)}"
+        )
