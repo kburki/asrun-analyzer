@@ -201,3 +201,26 @@ async def shutdown_event():
         logger.info("Application and scheduler stopped successfully")
     except Exception as e:
         logger.error(f"Error during shutdown: {str(e)}")
+        
+@app.get("/config/test")
+async def test_configuration():
+    """Test configuration without exposing sensitive data"""
+    try:
+        config = Config()
+        return {
+            "status": "success",
+            "config_test": {
+                "ssh_host_configured": bool(config.ssh_host),
+                "ssh_user_configured": bool(config.ssh_username),
+                "ssh_password_configured": bool(config.ssh_password),
+                "remote_path_configured": bool(config.remote_path),
+                "local_storage_configured": str(config.local_storage),
+                "local_storage_exists": config.local_storage.exists(),
+            }
+        }
+    except Exception as e:
+        logger.error(f"Configuration test failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Configuration test failed: {str(e)}"
+        )
